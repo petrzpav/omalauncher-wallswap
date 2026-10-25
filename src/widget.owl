@@ -3,7 +3,7 @@ widget "wallswap" {
   order: 5
   size: 3x3
   minSize: 2x2
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven every hour, cropped to the phone, with a preview, credits, previous and keep"; version: "1.1.0"; license: "MIT"; category: "media" }
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.2.0"; license: "MIT"; category: "media" }
 
   requires { pacman: ["curl", "jq", "file", "imagemagick"] }
 
@@ -15,7 +15,7 @@ widget "wallswap" {
 
   // Settings, set from the screen; the script gets them as one JSON argument.
   state sources = ["apod", "bing", "wikimedia", "wallhaven"] persist
-  state interval = 60 persist
+  state interval = 1440 persist
   state query = "" persist
 
   source sys = android.system every 10m

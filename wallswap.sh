@@ -10,7 +10,7 @@
 #   wallswap keep                  copy the current image into the theme's backgrounds
 #
 # CFG is one JSON argument (all keys optional):
-#   {"sources": ["apod","bing","wikimedia","wallhaven","local"], "interval": 60,
+#   {"sources": ["apod","bing","wikimedia","wallhaven","local"], "interval": 1440,
 #    "query": "", "screen": [1080, 2400], "theme": "tokyo-night", "localDir": "~/Pictures/Wallpapers"}
 #
 # The wallpaper is set the way the launcher's Style menu sets it: the image goes into
@@ -171,10 +171,15 @@ acceptable() { # width height
   (( w * 3 >= SCREEN_W * 2 && h * 3 >= SCREEN_H * 2 ))
 }
 
+# The theme's directory name. style.toml names it only when it isn't the default, and the
+# launcher gives the theme's title ("Tokyo Night"), so that is turned into its directory.
 theme_name() {
   local t
   t=$(sed -n 's/^theme[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$STYLE" 2>/dev/null | head -1)
-  [[ -n $t ]] || t=$THEME
+  if [[ -z $t ]]; then
+    t=${THEME,,}; t=${t//[^a-z0-9._-]/-}
+    [[ -n $t && ( -d $HOME/.config/omarchy/themes/$t || -d $HOME/.local/share/omarchy/themes/$t ) ]] || t=tokyo-night
+  fi
   [[ $t =~ ^[A-Za-z0-9._-]+$ && $t != . && $t != .. ]] || return 1
   echo "$t"
 }
@@ -272,7 +277,11 @@ try_candidate() { # source url title credit page w h
     --arg size "${dims/ /x}" --arg at "$(date -Iseconds)" \
     '{file:$file, id:$id, url:$url, title:$title, credit:$credit, page:$page, source:$source, sourceName:$sourceName, size:$size, fetchedAt:$at}' |
     atomic_write "$meta" || return 1
-  apply "$meta"
+  # The image is fine but can't be set: drop it, and don't download more that would fail too.
+  apply "$meta" && return 0
+  [[ $url == file://* ]] || rm -f -- "$file"
+  rm -f -- "$meta"
+  return 2
 }
 
 apply() { # meta.json [--no-history]
@@ -300,12 +309,15 @@ fallback_cached() {
 
 cmd_next() {
   (( ${#SOURCES[@]} )) || die "no sources switched on"
-  local attempt source line
+  theme_name >/dev/null || die "unexpected theme name"
+  local attempt source line rc
   for (( attempt = 0; attempt < ATTEMPTS; attempt++ )); do
     source=${SOURCES[RANDOM % ${#SOURCES[@]}]}
     declare -F "src_$source" >/dev/null || { log "unknown source: $source"; continue; }
     while IFS=$'\t' read -r url title credit page w h; do
-      try_candidate "$source" "$url" "$title" "$credit" "$page" "$w" "$h" && { prune_cache; return 0; }
+      try_candidate "$source" "$url" "$title" "$credit" "$page" "$w" "$h"; rc=$?
+      (( rc == 0 )) && { prune_cache; return 0; }
+      (( rc == 2 )) && { date +%s | write_state failed; die "couldn't set the background"; }
     done < <("src_$source" 2>/dev/null | shuf)
     log "$source: nothing new, trying another source"
   done
@@ -378,12 +390,12 @@ cmd=${1:-help}
 cfg=${2:-'{}'}
 jq -e 'type == "object"' >/dev/null 2>&1 <<< "$cfg" || cfg='{}'
 mapfile -t SOURCES < <(jq -r '(.sources // ["apod","bing","wikimedia","wallhaven"])[] | select(test("^[a-z]+$"))' <<< "$cfg")
-INTERVAL=$(jq -r '.interval // 60' <<< "$cfg")
+INTERVAL=$(jq -r '.interval // 1440' <<< "$cfg")
 QUERY=$(jq -r '.query // ""' <<< "$cfg")
 THEME=$(jq -r '.theme // ""' <<< "$cfg")
 LOCAL_DIR=$(jq -r '.localDir // "~/Pictures/Wallpapers"' <<< "$cfg"); LOCAL_DIR=${LOCAL_DIR/#\~/$HOME}
 read -r SCREEN_W SCREEN_H < <(jq -r '(.screen // [1080, 2400]) | map(tostring) | join(" ")' <<< "$cfg")
-[[ $INTERVAL =~ ^[0-9]+$ ]] || INTERVAL=60
+[[ $INTERVAL =~ ^[0-9]+$ ]] || INTERVAL=1440
 [[ $SCREEN_W =~ ^[0-9]+$ && $SCREEN_W -ge 200 && $SCREEN_W -le 8000 ]] || SCREEN_W=1080
 [[ $SCREEN_H =~ ^[0-9]+$ && $SCREEN_H -ge 200 && $SCREEN_H -le 8000 ]] || SCREEN_H=2400
 

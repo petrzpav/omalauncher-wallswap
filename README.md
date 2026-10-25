@@ -1,7 +1,7 @@
 # Wallswap for omalauncher
 
 An [omalauncher](https://github.com/SimonSchubert/omarchy-widgets) home-screen widget that keeps your
-wallpaper fresh. Every hour it picks an image from one of a few good sources, crops it to the phone's
+wallpaper fresh. Once a day it picks an image from one of a few good sources, crops it to the phone's
 screen and sets it as the launcher's background.
 
 It's the phone sibling of [omarchy-wallswap](https://github.com/petrzpav/omarchy-wallswap), the
