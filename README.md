@@ -31,7 +31,7 @@ From the **widget store**: long-press empty space on the home screen, open the s
 (e.g. as `45-wallswap.owl`). The tile offers to install what it needs (`curl`, `jq`, `file`,
 `imagemagick`) on first start.
 
-The **tile** shows the current image with its title and when the next swap is due; **↻** swaps now.
+The **tile** shows the current image with its title and when the next swap is due; **→** swaps now.
 **Tap** the tile for its screen:
 
 - the image, its title, credit and resolution (tap it for the source page)

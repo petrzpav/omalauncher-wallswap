@@ -207,10 +207,9 @@ set_background() { # source-file id  -> prints the installed path
     -extent "${SCREEN_W}x${SCREEN_H}" -strip -quality 90 "jpeg:$dir/.$name.tmp" 2>/dev/null &&
     mv -f -- "$dir/.$name.tmp" "$dir/$name" || { rm -f -- "$dir/.$name.tmp"; return 1; }
   set_style_background "$name" || return 1
-  local old
-  for old in "$BG_ROOT"/*/wallswap-*.jpg; do
-    [[ -f $old && $old != "$dir/$name" ]] && rm -f -- "$old"
-  done
+  # The one shown before stays until the next swap, so a view still showing it never loses it.
+  ls -1t -- "$BG_ROOT"/*/wallswap-*.jpg 2>/dev/null | grep -vxF -- "$dir/$name" | tail -n +2 |
+    while read -r old; do rm -f -- "$old"; done
   echo "$dir/$name"
 }
 
@@ -358,8 +357,9 @@ cmd_info() {
     --argjson paused "$([[ -f $STATE_DIR/paused ]] && echo true || echo false)" \
     --argjson history "$(wc -l < "$STATE_DIR/history" 2>/dev/null || echo 0)" \
     --arg error "$(cat "$STATE_DIR/error" 2>/dev/null)" \
-    --argjson shown "$(grep -q '^background[[:space:]]*=[[:space:]]*"wallswap-' "$STYLE" 2>/dev/null && echo true || echo false)" \
-    '. + {nextAt: $next, paused: $paused, hasPrevious: ($history >= 2), error: $error, shown: $shown}' <<< "$cur"
+    --arg style "$(sed -n 's/^background[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$STYLE" 2>/dev/null | head -1)" \
+    '. + {nextAt: $next, paused: $paused, hasPrevious: ($history >= 2), error: $error,
+      shown: (.bg != null and ((.bg | split("/") | last) as $b | $style == $b or ("wallswap-" + $style) == $b))}' <<< "$cur"
 }
 
 cmd_keep() {

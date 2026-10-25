@@ -3,7 +3,7 @@ widget "wallswap" {
   order: 5
   size: 3x3
   minSize: 2x2
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven every hour, cropped to the phone, with a preview, credits, previous and keep"; version: "1.0.0"; license: "MIT"; category: "media" }
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven every hour, cropped to the phone, with a preview, credits, previous and keep"; version: "1.0.1"; license: "MIT"; category: "media" }
 
   requires { pacman: ["curl", "jq", "file", "imagemagick"] }
 
@@ -53,20 +53,34 @@ widget "wallswap" {
     {id: "local", label: "Local folder", detail: "~/Pictures/Wallpapers"}
   ]
 
-  // While a swap runs the glyph turns: every second it gets another full turn to ease towards.
-  state spin = 0
-  every 1s { if busy { spin = spin + 360 } }
-
   padding: 0
   onTap: screen()
 
-  component Action(glyph, label, active = true) {
+  // Arrows drawn as lines, so they sit in the middle of their circles whatever the font: a right
+  // arrow turned by `turn` degrees, and for keep a down arrow onto a line.
+  component Glyph(turn = 0, base = false, tint = accent, s = 18) {
+    Canvas {
+      width: s
+      height: s
+      translate(0, base ? -s * 0.1 : 0) {
+        rotate(turn, s / 2, s / 2) {
+          line(s * 0.16, s / 2, s * 0.82, s / 2, stroke: tint, width: s * 0.11, cap: round)
+          path([[s * 0.54, s * 0.22], [s * 0.82, s / 2], [s * 0.54, s * 0.78]], stroke: tint, width: s * 0.11, cap: round)
+        }
+      }
+      if base {
+        line(s * 0.2, s * 0.9, s * 0.8, s * 0.9, stroke: tint, width: s * 0.11, cap: round)
+      }
+    }
+  }
+
+  component Action(label, turn = 0, base = false, active = true) {
     Column {
       gap: 4
       align: center
       opacity: active ? 1 : 0.35
       Box { width: 44; height: 44; radius: 22; align: center; background: alpha(accent, 0.16)
-        Text { text: glyph; fontSize: 20; color: accent; align: center }
+        Glyph { turn: turn; base: base; s: 20 }
       }
       Text { text: label; style: small; color: muted; align: center; maxLines: 1 }
     }
@@ -104,8 +118,9 @@ widget "wallswap" {
           radius: 16
           align: center
           background: alpha(accent, 0.22)
+          opacity: busy ? 0.4 : 1
           onTap: { if !busy { haptic(); busy = true; nextAt = 0; out = run("bash -c ${sh(ws)} wallswap next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-          Text { text: "↻"; fontSize: 16; bold: true; color: accent; align: center; rotation: busy ? spin : 0; animate rotation: tween(1000ms, "linear") }
+          Glyph { s: 16 }
         }
       }
     }
@@ -143,16 +158,16 @@ widget "wallswap" {
       Row {
         justify: spaceEvenly
         Box { weight: 1; onTap: { if !busy { haptic(); busy = true; nextAt = 0; out = run("bash -c ${sh(ws)} wallswap next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-          Action { glyph: "↻"; label: "next"; active: !busy }
+          Action { label: "next"; active: !busy }
         }
         Box { weight: 1; onTap: { if !busy && st.hasPrevious == true { haptic(); busy = true; out = run("bash -c ${sh(ws)} wallswap prev ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
-          Action { glyph: "↺"; label: "previous"; active: !busy && st != null && st.hasPrevious == true }
+          Action { label: "previous"; turn: 180; active: !busy && st != null && st.hasPrevious == true }
         }
         Box { weight: 1; onTap: { if hasImg && st.page != "" { url(st.page) } }
-          Action { glyph: "↗"; label: "source"; active: hasImg && st.page != "" }
+          Action { label: "source"; turn: -45; active: hasImg && st.page != "" }
         }
         Box { weight: 1; onTap: { if hasImg { haptic(); run("bash -c ${sh(ws)} wallswap keep ${sh(cfg)}"); notify("wallswap", "Kept in the theme's backgrounds") } }
-          Action { glyph: "⤓"; label: "keep"; active: hasImg }
+          Action { label: "keep"; turn: 90; base: true; active: hasImg }
         }
       }
       Row {
