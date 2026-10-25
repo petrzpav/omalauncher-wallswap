@@ -37,6 +37,7 @@ The **tile** is clear, a window onto the wallpaper itself, with its title and wh
 - the image, its title, credit and resolution (tap it for the source page)
 - **next** / **previous** / **source** page / **keep**
 - **Automatic swapping**: pause or resume
+- **Only on Wi-Fi** (on by default): automatic swaps wait for Wi-Fi, checked again every 10 minutes; **next** always swaps
 - **Sources**: switch each on or off (at least one stays on), and how often to swap: 15 min … once a
   day … only when you ask
 - **Wallhaven search**, e.g. `space`, `mountains`, `city night`

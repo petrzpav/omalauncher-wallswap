@@ -11,7 +11,9 @@
 #
 # CFG is one JSON argument (all keys optional):
 #   {"sources": ["apod","bing","wikimedia","wallhaven","local"], "interval": 1440,
-#    "query": "", "screen": [1080, 2400], "theme": "tokyo-night", "localDir": "~/Pictures/Wallpapers"}
+#    "query": "", "screen": [1080, 2400], "theme": "tokyo-night", "localDir": "~/Pictures/Wallpapers",
+#    "wifiOnly": true}
+# With wifiOnly, automatic swaps wait for Wi-Fi; next always swaps.
 #
 # The wallpaper is set the way the launcher's Style menu sets it: the image goes into
 # ~/.config/omarchy/backgrounds/<theme>/ as wallswap-*.jpg, cropped to the screen, and
@@ -34,7 +36,7 @@ BG_ROOT=$HOME/.config/omarchy/backgrounds
 UA="wallswap/1.0 (omalauncher wallpaper widget)"
 ATTEMPTS=6
 KEEP=40
-RETRY=600 # after a failed swap, try again in 10 minutes
+RETRY=600 # after a failed swap, or without Wi-Fi, try again in 10 minutes
 
 log() { echo "wallswap: $*" >&2; }
 die() { log "$*"; printf '%s\n' "$*" | write_state error 2>/dev/null; exit 1; }
@@ -161,6 +163,15 @@ src_local() {
 }
 
 # --------------------------------------------------------------- helpers
+
+# Android keeps a default route per network it's connected to; a Wi-Fi one means Wi-Fi.
+# When the routes can't be read, don't hold swaps back.
+on_wifi() {
+  local routes
+  routes=$(ip -o route show table all 2>/dev/null) || return 0
+  [[ -n $routes ]] || return 0
+  grep -qE '^default .*dev (wlan|wifi)' <<< "$routes"
+}
 
 seen() { grep -qxF -- "$1" "$STATE_DIR/seen" 2>/dev/null; }
 
@@ -292,7 +303,7 @@ apply() { # meta.json [--no-history]
   jq --arg bg "$bg" '. + {bg: $bg}' "$1" | write_state current.json
   [[ $2 == --no-history ]] || append_state history "$1"
   date +%s | write_state last
-  rm -f -- "$STATE_DIR/error" "$STATE_DIR/failed"
+  rm -f -- "$STATE_DIR/error" "$STATE_DIR/failed" "$STATE_DIR/nowifi"
   log "set $(jq -r '"\(.title) — \(.credit)"' "$1")"
 }
 
@@ -341,22 +352,32 @@ cmd_toggle() { if [[ -f $STATE_DIR/paused ]]; then cmd_resume; else cmd_pause; f
 cmd_tick() {
   (( INTERVAL > 0 )) || return 0
   [[ -f $STATE_DIR/paused ]] && return 0
-  local last failed now
+  local last failed nowifi now
   last=$(cat "$STATE_DIR/last" 2>/dev/null || echo 0)
   failed=$(cat "$STATE_DIR/failed" 2>/dev/null || echo 0)
+  nowifi=$(cat "$STATE_DIR/nowifi" 2>/dev/null || echo 0)
   now=$(date +%s)
-  (( now - last >= INTERVAL * 60 && now - failed >= RETRY )) || return 0
+  (( now - last >= INTERVAL * 60 && now - failed >= RETRY && now - nowifi >= RETRY )) || return 0
+  if [[ $WIFI_ONLY == true ]] && ! on_wifi; then
+    log "not on Wi-Fi, waiting"
+    echo "$now" | write_state nowifi
+    return 0
+  fi
   cmd_next
 }
 
 # When the next automatic swap is due, as Unix seconds (0: none).
 next_at() {
   (( INTERVAL > 0 )) && [[ ! -f $STATE_DIR/paused ]] || { echo 0; return; }
-  local last failed
+  local last failed nowifi at
   last=$(cat "$STATE_DIR/last" 2>/dev/null || echo 0)
   failed=$(cat "$STATE_DIR/failed" 2>/dev/null || echo 0)
+  nowifi=$(cat "$STATE_DIR/nowifi" 2>/dev/null || echo 0)
   (( last > 0 )) || last=$(( $(date +%s) - INTERVAL * 60 ))
-  echo $(( last + INTERVAL * 60 > failed + RETRY ? last + INTERVAL * 60 : failed + RETRY ))
+  at=$(( last + INTERVAL * 60 ))
+  (( failed + RETRY > at )) && at=$(( failed + RETRY ))
+  (( nowifi + RETRY > at )) && at=$(( nowifi + RETRY ))
+  echo "$at"
 }
 
 cmd_info() {
@@ -367,10 +388,11 @@ cmd_info() {
   [[ -n $current && -f $current ]] || cur=$(jq -c 'del(.bg)' <<< "$cur" 2>/dev/null || echo '{}')
   jq -c --argjson next "$(next_at)" \
     --argjson paused "$([[ -f $STATE_DIR/paused ]] && echo true || echo false)" \
-    --argjson history "$(wc -l < "$STATE_DIR/history" 2>/dev/null || echo 0)" \
+    --argjson waitingWifi "$([[ $WIFI_ONLY == true && -f $STATE_DIR/nowifi ]] && echo true || echo false)" \
+    --argjson history "$(wc -l 2>/dev/null < "$STATE_DIR/history" || echo 0)" \
     --arg error "$(cat "$STATE_DIR/error" 2>/dev/null)" \
     --arg style "$(sed -n 's/^background[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$STYLE" 2>/dev/null | head -1)" \
-    '. + {nextAt: $next, paused: $paused, hasPrevious: ($history >= 2), error: $error,
+    '. + {nextAt: $next, paused: $paused, waitingWifi: $waitingWifi, hasPrevious: ($history >= 2), error: $error,
       shown: (.bg != null and ((.bg | split("/") | last) as $b | $style == $b or ("wallswap-" + $style) == $b))}' <<< "$cur"
 }
 
@@ -392,6 +414,7 @@ jq -e 'type == "object"' >/dev/null 2>&1 <<< "$cfg" || cfg='{}'
 mapfile -t SOURCES < <(jq -r '(.sources // ["apod","bing","wikimedia","wallhaven"])[] | select(test("^[a-z]+$"))' <<< "$cfg")
 INTERVAL=$(jq -r '.interval // 1440' <<< "$cfg")
 QUERY=$(jq -r '.query // ""' <<< "$cfg")
+WIFI_ONLY=$(jq -r 'if .wifiOnly == false then false else true end' <<< "$cfg")
 THEME=$(jq -r '.theme // ""' <<< "$cfg")
 LOCAL_DIR=$(jq -r '.localDir // "~/Pictures/Wallpapers"' <<< "$cfg"); LOCAL_DIR=${LOCAL_DIR/#\~/$HOME}
 read -r SCREEN_W SCREEN_H < <(jq -r '(.screen // [1080, 2400]) | map(tostring) | join(" ")' <<< "$cfg")

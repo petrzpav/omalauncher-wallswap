@@ -3,9 +3,9 @@ widget "wallswap" {
   order: 5
   size: 3x3
   minSize: 2x2
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.2.0"; license: "MIT"; category: "media" }
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.3.0"; license: "MIT"; category: "media" }
 
-  requires { pacman: ["curl", "jq", "file", "imagemagick"] }
+  requires { pacman: ["curl", "jq", "file", "imagemagick", "iproute2"] }
 
   // The whole wallswap script, run with bash -c: wallswap.sh in https://github.com/petrzpav/omalauncher-wallswap,
   // spliced in by build.sh. It fetches, crops the image to the screen into
@@ -17,10 +17,11 @@ widget "wallswap" {
   state sources = ["apod", "bing", "wikimedia", "wallhaven"] persist
   state interval = 1440 persist
   state query = "" persist
+  state wifiOnly = true persist
 
   source sys = android.system every 10m
   source now = clock every 30s
-  let cfg = toJson({sources: sources, interval: interval, query: query, screen: sys == null ? null : [sys.display.width, sys.display.height], theme: sys == null ? null : sys.theme})
+  let cfg = toJson({sources: sources, interval: interval, query: query, wifiOnly: wifiOnly, screen: sys == null ? null : [sys.display.width, sys.display.height], theme: sys == null ? null : sys.theme})
   source st = cmd("bash -c ${sh(ws)} wallswap info ${sh(cfg)}") every 1m json
 
   // The schedule: `at` runs even while the page is off screen, and a time missed while the launcher
@@ -42,9 +43,10 @@ widget "wallswap" {
   let hasImg = st != null && st.bg != null
   let err = st == null ? "" : st.error ?? ""
   let paused = st != null && st.paused == true
+  let waitingWifi = st != null && st.waitingWifi == true
   let intervals = [15, 30, 60, 180, 360, 1440, 0]
   let everyLabel = interval <= 0 ? "only when you ask" : interval % 1440 == 0 ? "once a day" : interval % 60 == 0 ? (interval == 60 ? "every hour" : "every ${interval / 60} hours") : "every ${interval} minutes"
-  let statusText = busy ? "fetching a new wallpaper…" : err != "" ? err : paused ? "paused" : interval <= 0 ? "swaps only when you ask" : st == null || now == null || st.nextAt <= 0 ? "" : st.nextAt <= now ? "swapping soon" : "next swap ${fmtAgo(st.nextAt, now)}"
+  let statusText = busy ? "fetching a new wallpaper…" : err != "" ? err : paused ? "paused" : interval <= 0 ? "swaps only when you ask" : waitingWifi ? "waiting for Wi-Fi" : st == null || now == null || st.nextAt <= 0 ? "" : st.nextAt <= now ? "swapping soon" : "next swap ${fmtAgo(st.nextAt, now)}"
   let allSources = [
     {id: "apod", label: "NASA APOD", detail: "Astronomy Picture of the Day"},
     {id: "bing", label: "Bing", detail: "Image of the day, in the phone's size"},
@@ -182,6 +184,21 @@ widget "wallswap" {
           Text { text: interval <= 0 ? "off: swaps only when you ask" : paused ? "paused" : everyLabel; style: small; color: muted }
         }
         Box { width: 44; height: 24; radius: 12; padding: 3; background: !paused && interval > 0 ? accent : alpha(muted, 0.35); align: !paused && interval > 0 ? "end" : "start"
+          Box { width: 18; height: 18; radius: 9; background: background }
+        }
+      }
+      Row {
+        gap: 12
+        align: center
+        padding: [0, 4]
+        onTap: { haptic(); wifiOnly = !wifiOnly }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: "Only on Wi-Fi" }
+          Text { text: wifiOnly ? "automatic swaps wait for Wi-Fi; next always swaps" : "on mobile data too"; style: small; color: muted }
+        }
+        Box { width: 44; height: 24; radius: 12; padding: 3; background: wifiOnly ? accent : alpha(muted, 0.35); align: wifiOnly ? "end" : "start"
           Box { width: 18; height: 18; radius: 9; background: background }
         }
       }
