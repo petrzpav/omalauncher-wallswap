@@ -3,7 +3,7 @@ widget "wallswap" {
   order: 5
   size: 3x3
   minSize: 2x2
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven every hour, cropped to the phone, with a preview, credits, previous and keep"; version: "1.0.1"; license: "MIT"; category: "media" }
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven every hour, cropped to the phone, with a preview, credits, previous and keep"; version: "1.1.0"; license: "MIT"; category: "media" }
 
   requires { pacman: ["curl", "jq", "file", "imagemagick"] }
 
@@ -53,7 +53,9 @@ widget "wallswap" {
     {id: "local", label: "Local folder", detail: "~/Pictures/Wallpapers"}
   ]
 
+  // The tile is clear: the wallpaper itself shows through it, with only the caption over it.
   padding: 0
+  background: alpha(background, 0)
   onTap: screen()
 
   // Arrows drawn as lines, so they sit in the middle of their circles whatever the font: a right
@@ -89,9 +91,7 @@ widget "wallswap" {
   Box {
     fill: true
     clip: true
-    if hasImg {
-      Image { src: st.bg; fit: cover; fill: true; label: st.title }
-    } else {
+    if !hasImg {
       Box { fill: true; align: center; background: alpha(surface, 0.5)
         Text { text: "󰸉"; fontSize: 40; color: muted; align: center }
       }
