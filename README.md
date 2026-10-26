@@ -38,6 +38,7 @@ The **tile** is clear, a window onto the wallpaper itself, with its title and wh
 - **next** / **previous** / **source** page / **keep**
 - **Automatic swapping**: pause or resume
 - **Only on Wi-Fi** (on by default): automatic swaps wait for Wi-Fi, checked again every 10 minutes; **next** always swaps
+- **Not while sleeping** (on by default): automatic swaps wait while Do Not Disturb or Bedtime mode is on, and catch up when it turns off
 - **Sources**: switch each on or off (at least one stays on), and how often to swap: 15 min … once a
   day … only when you ask
 - **Wallhaven search**, e.g. `space`, `mountains`, `city night`

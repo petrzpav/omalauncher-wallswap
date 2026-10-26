@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-26
+
+### Added
+
+- Not while sleeping, on by default: automatic swaps wait while Do Not Disturb (and so Bedtime mode) is on; a swap that came due then runs when it turns off. next always swaps.
+
 ## [1.3.0] - 2026-10-25
 
 ### Added
@@ -47,7 +53,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Swap the omalauncher wallpaper from NASA APOD, Bing, Wikimedia Commons, Wallhaven or a local folder, cropped to the phone's screen.
 - A tile with the current image and a next button; a screen with previous, source page, keep, pause, sources, interval and a Wallhaven search.
 
-[Unreleased]: https://github.com/petrzpav/omalauncher-wallswap/compare/v1.3.0...dev
+[Unreleased]: https://github.com/petrzpav/omalauncher-wallswap/compare/v1.4.0...dev
+[1.4.0]: https://github.com/petrzpav/omalauncher-wallswap/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/petrzpav/omalauncher-wallswap/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/petrzpav/omalauncher-wallswap/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/petrzpav/omalauncher-wallswap/compare/v1.0.1...v1.1.0
