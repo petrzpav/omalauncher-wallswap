@@ -175,6 +175,28 @@ on_wifi() {
 
 seen() { grep -qxF -- "$1" "$STATE_DIR/seen" 2>/dev/null; }
 
+# The local folder takes turns: every image once, in random order, before any comes round
+# again. A download, once tried, is done for good.
+local_shown() { grep -qxF -- "$1" "$STATE_DIR/local-shown" 2>/dev/null; }
+mark_done() { # source url
+  if [[ $1 == local ]]; then append_state local-shown "$2"; else append_state seen "$2"; fi
+}
+# A new round leaves out only the image showing, so it doesn't come straight back.
+new_local_round() {
+  jq -r 'select(.source == "local") | .url // empty' "$STATE_DIR/current.json" 2>/dev/null | write_state local-shown
+}
+
+switched_on() { [[ " ${SOURCES[*]} " == *" $1 "* ]]; }
+# Only the web sources need the network.
+needs_network() {
+  local s
+  for s in "${SOURCES[@]}"; do [[ $s == local ]] || return 0; done
+  return 1
+}
+# When a swap last waited for Wi-Fi (0: it doesn't wait).
+nowifi_at() { needs_network && cat "$STATE_DIR/nowifi" 2>/dev/null || echo 0; }
+pretty_dir() { echo "${LOCAL_DIR/#"$HOME"/'~'}"; }
+
 # Big enough to cover the screen without blowing it up more than 1.5 times.
 acceptable() { # width height
   local w=$1 h=$2
@@ -246,8 +268,8 @@ try_candidate() { # source url title credit page w h
   [[ -n $url ]] || return 1
   allowed_image "$source" "$url" || { log "$source: ignoring image outside its hosts: ${url:0:120}"; return 1; }
   allowed_page "$source" "$page" || page=""
-  seen "$url" && return 1
-  acceptable "$w" "$h" || { append_state seen "$url"; return 1; }
+  if [[ $source == local ]]; then local_shown "$url" && return 1; else seen "$url" && return 1; fi
+  acceptable "$w" "$h" || { mark_done "$source" "$url"; return 1; }
 
   local id ext file tmp dims coder
   id=$(printf '%s' "$url" | sha1sum | cut -c1-12)
@@ -270,12 +292,12 @@ try_candidate() { # source url title credit page w h
   [[ -n $coder ]] && dims=$(magick identify -format '%w %h' "$coder:${file}[0]" 2>/dev/null)
   if [[ -z $dims ]] || ! acceptable $dims; then
     log "rejected $url (${dims:-not an image})"
-    append_state seen "$url"
+    mark_done "$source" "$url"
     [[ $url == file://* ]] || rm -f -- "$file"
     return 1
   fi
 
-  append_state seen "$url"
+  mark_done "$source" "$url"
   if [[ $source == wallhaven && $page =~ /w/([a-z0-9]+)$ ]]; then
     local tags
     tags=$(http "https://wallhaven.cc/api/v1/w/${BASH_REMATCH[1]}" 2>/dev/null |
@@ -307,10 +329,13 @@ apply() { # meta.json [--no-history]
   log "set $(jq -r '"\(.title) — \(.credit)"' "$1")"
 }
 
+# A download from a source that is still switched on; the local folder has its rounds instead.
 fallback_cached() {
   local current meta
   current=$(jq -r '.file' "$STATE_DIR/current.json" 2>/dev/null)
   meta=$(ls -1 "$CACHE_DIR"/*.json 2>/dev/null | shuf | while read -r m; do
+    src=$(jq -r '.source' "$m")
+    [[ $src != local ]] && switched_on "$src" || continue
     [[ $(jq -r '.file' "$m") != "$current" && -f $(jq -r '.file' "$m") ]] && { echo "$m"; break; }
   done)
   [[ -n $meta ]] || return 1
@@ -318,21 +343,46 @@ fallback_cached() {
   apply "$meta"
 }
 
+try_source() { # source  -> 0 set, 1 nothing new, 2 can't set any
+  local url title credit page w h rc
+  while IFS=$'\t' read -r url title credit page w h; do
+    try_candidate "$1" "$url" "$title" "$credit" "$page" "$w" "$h"; rc=$?
+    (( rc == 1 )) || return "$rc"
+  done < <("src_$1" 2>/dev/null | shuf)
+  return 1
+}
+
 cmd_next() {
   (( ${#SOURCES[@]} )) || die "no sources switched on"
   theme_name >/dev/null || die "unexpected theme name"
-  local attempt source line rc
+  local attempt source rc local_done=
   for (( attempt = 0; attempt < ATTEMPTS; attempt++ )); do
     source=${SOURCES[RANDOM % ${#SOURCES[@]}]}
     declare -F "src_$source" >/dev/null || { log "unknown source: $source"; continue; }
-    while IFS=$'\t' read -r url title credit page w h; do
-      try_candidate "$source" "$url" "$title" "$credit" "$page" "$w" "$h"; rc=$?
-      (( rc == 0 )) && { prune_cache; return 0; }
-      (( rc == 2 )) && { date +%s | write_state failed; die "couldn't set the background"; }
-    done < <("src_$source" 2>/dev/null | shuf)
+    [[ $source == local && -n $local_done ]] && continue
+    try_source "$source"; rc=$?
+    # Every image in the folder has had its turn: start the next round.
+    if (( rc == 1 )) && [[ $source == local ]]; then
+      local_done=1
+      new_local_round
+      try_source local; rc=$?
+    fi
+    (( rc == 0 )) && { prune_cache; return 0; }
+    (( rc == 2 )) && { date +%s | write_state failed; die "couldn't set the background"; }
     log "$source: nothing new, trying another source"
   done
   fallback_cached && return 0
+  if ! needs_network; then
+    [[ -d $LOCAL_DIR ]] || { date +%s | write_state failed; die "folder not found: $(pretty_dir)"; }
+    [[ -n $(src_local 2>/dev/null | head -1) ]] || { date +%s | write_state failed; die "no images in $(pretty_dir)"; }
+    if inside_local_dir "$(jq -r '.file // empty' "$STATE_DIR/current.json" 2>/dev/null)"; then
+      # Nothing but the image showing: on the schedule that's no error, just wait for the next one.
+      if [[ $cmd == tick ]]; then date +%s | write_state last; rm -f -- "$STATE_DIR/error"; return 0; fi
+      die "no other usable image in $(pretty_dir)"
+    fi
+    date +%s | write_state failed
+    die "no usable image in $(pretty_dir)"
+  fi
   date +%s | write_state failed
   die "couldn't fetch a new background"
 }
@@ -355,10 +405,10 @@ cmd_tick() {
   local last failed nowifi now
   last=$(cat "$STATE_DIR/last" 2>/dev/null || echo 0)
   failed=$(cat "$STATE_DIR/failed" 2>/dev/null || echo 0)
-  nowifi=$(cat "$STATE_DIR/nowifi" 2>/dev/null || echo 0)
+  nowifi=$(nowifi_at)
   now=$(date +%s)
   (( now - last >= INTERVAL * 60 && now - failed >= RETRY && now - nowifi >= RETRY )) || return 0
-  if [[ $WIFI_ONLY == true ]] && ! on_wifi; then
+  if [[ $WIFI_ONLY == true ]] && needs_network && ! on_wifi; then
     log "not on Wi-Fi, waiting"
     echo "$now" | write_state nowifi
     return 0
@@ -372,7 +422,7 @@ next_at() {
   local last failed nowifi at
   last=$(cat "$STATE_DIR/last" 2>/dev/null || echo 0)
   failed=$(cat "$STATE_DIR/failed" 2>/dev/null || echo 0)
-  nowifi=$(cat "$STATE_DIR/nowifi" 2>/dev/null || echo 0)
+  nowifi=$(nowifi_at)
   (( last > 0 )) || last=$(( $(date +%s) - INTERVAL * 60 ))
   at=$(( last + INTERVAL * 60 ))
   (( failed + RETRY > at )) && at=$(( failed + RETRY ))
@@ -388,7 +438,7 @@ cmd_info() {
   [[ -n $current && -f $current ]] || cur=$(jq -c 'del(.bg)' <<< "$cur" 2>/dev/null || echo '{}')
   jq -c --argjson next "$(next_at)" \
     --argjson paused "$([[ -f $STATE_DIR/paused ]] && echo true || echo false)" \
-    --argjson waitingWifi "$([[ $WIFI_ONLY == true && -f $STATE_DIR/nowifi ]] && echo true || echo false)" \
+    --argjson waitingWifi "$([[ $WIFI_ONLY == true && -f $STATE_DIR/nowifi ]] && needs_network && echo true || echo false)" \
     --argjson history "$(wc -l 2>/dev/null < "$STATE_DIR/history" || echo 0)" \
     --arg error "$(cat "$STATE_DIR/error" 2>/dev/null)" \
     --arg style "$(sed -n 's/^background[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$STYLE" 2>/dev/null | head -1)" \
@@ -416,7 +466,9 @@ INTERVAL=$(jq -r '.interval // 1440' <<< "$cfg")
 QUERY=$(jq -r '.query // ""' <<< "$cfg")
 WIFI_ONLY=$(jq -r 'if .wifiOnly == false then false else true end' <<< "$cfg")
 THEME=$(jq -r '.theme // ""' <<< "$cfg")
-LOCAL_DIR=$(jq -r '.localDir // "~/Pictures/Wallpapers"' <<< "$cfg"); LOCAL_DIR=${LOCAL_DIR/#\~/$HOME}
+LOCAL_DIR=$(jq -r '.localDir // "" | if . == "" then "~/Pictures/Wallpapers" else . end' <<< "$cfg")
+[[ $LOCAL_DIR == "~" || $LOCAL_DIR == "~/"* ]] && LOCAL_DIR=$HOME${LOCAL_DIR#\~}
+[[ $LOCAL_DIR == /* ]] || LOCAL_DIR=$HOME/$LOCAL_DIR # relative to home
 read -r SCREEN_W SCREEN_H < <(jq -r '(.screen // [1080, 2400]) | map(tostring) | join(" ")' <<< "$cfg")
 [[ $INTERVAL =~ ^[0-9]+$ ]] || INTERVAL=1440
 [[ $SCREEN_W =~ ^[0-9]+$ && $SCREEN_W -ge 200 && $SCREEN_W -le 8000 ]] || SCREEN_W=1080

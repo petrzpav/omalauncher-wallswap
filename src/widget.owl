@@ -3,9 +3,9 @@ widget "wallswap" {
   order: 5
   size: 3x3
   minSize: 2x2
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons or Wallhaven once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.4.0"; license: "MIT"; category: "media" }
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons, Wallhaven or a folder of your own once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.4.1"; license: "MIT"; category: "media" }
 
-  requires { pacman: ["curl", "jq", "file", "imagemagick", "iproute2"] }
+  requires { pacman: ["curl", "jq", "file", "imagemagick", "libjpeg-turbo", "libwebp", "iproute2"] }
 
   // The whole wallswap script, run with bash -c: wallswap.sh in https://github.com/petrzpav/omalauncher-wallswap,
   // spliced in by build.sh. It fetches, crops the image to the screen into
@@ -17,6 +17,7 @@ widget "wallswap" {
   state sources = ["apod", "bing", "wikimedia", "wallhaven"] persist
   state interval = 1440 persist
   state query = "" persist
+  state localDir = "~/Pictures/Wallpapers" persist
   state wifiOnly = true persist
   state notAsleep = true persist
 
@@ -25,7 +26,7 @@ widget "wallswap" {
   // Bedtime mode turns on Do Not Disturb: while it's on, automatic swaps wait.
   source modes = android.modes
   let asleep = notAsleep && modes != null && modes.dnd == true
-  let cfg = toJson({sources: sources, interval: interval, query: query, wifiOnly: wifiOnly, screen: sys == null ? null : [sys.display.width, sys.display.height], theme: sys == null ? null : sys.theme})
+  let cfg = toJson({sources: sources, interval: interval, query: query, localDir: localDir, wifiOnly: wifiOnly, screen: sys == null ? null : [sys.display.width, sys.display.height], theme: sys == null ? null : sys.theme})
   source st = cmd("bash -c ${sh(ws)} wallswap info ${sh(cfg)}") every 1m json
 
   // The schedule: `at` runs even while the page is off screen, and a time missed while the launcher
@@ -61,7 +62,7 @@ widget "wallswap" {
     {id: "bing", label: "Bing", detail: "Image of the day, in the phone's size"},
     {id: "wikimedia", label: "Wikimedia Commons", detail: "Picture of the day"},
     {id: "wallhaven", label: "Wallhaven", detail: query != "" ? "Top wallpapers matching “${query}”" : "Top wallpapers of the year"},
-    {id: "local", label: "Local folder", detail: "~/Pictures/Wallpapers"}
+    {id: "local", label: "Local folder", detail: "Each image in turn from ${localDir}"}
   ]
 
   // The tile is clear: the wallpaper itself shows through it, with only the caption over it.
@@ -264,6 +265,12 @@ widget "wallswap" {
         gap: 2
         Text { text: "WALLHAVEN SEARCH"; fontSize: 10; letterSpacing: 2; color: muted }
         Input { text: query; placeholder: "e.g. space, mountains, city night"; onSubmit: query = trim(value) }
+      }
+      Column {
+        gap: 2
+        Text { text: "LOCAL FOLDER"; fontSize: 10; letterSpacing: 2; color: muted }
+        Input { text: localDir; placeholder: "~/Pictures/Wallpapers"; onSubmit: localDir = trim(value) == "" ? "~/Pictures/Wallpapers" : trim(value) }
+        Text { text: "JPEG, PNG and WebP images in it and its subfolders, one level deep"; style: small; color: muted }
       }
       Text { text: "Images keep their original licenses; tap the picture for its source page. A port of omarchy-wallswap."; style: small; color: muted }
     }

@@ -14,10 +14,11 @@ cache and history, with the bash script ported to the launcher.
 | `bing` | Bing image of the day (last ~2 weeks), in the phone's portrait size |
 | `wikimedia` | Wikimedia Commons picture of the day, random from the last 3 years |
 | `wallhaven` | Top SFW portrait wallpapers of the year on wallhaven.cc, optionally filtered by a search |
-| `local` | A folder of your own images, `~/Pictures/Wallpapers` |
+| `local` | A folder of your own images, `~/Pictures/Wallpapers` or one you pick on the screen: each one in turn, in random order, before any comes round again |
 
 The first four are on by default. Images too small to cover the screen are skipped, repeats are
-avoided, and when you are offline it rotates through the ~40 images it has already cached.
+avoided, and when you are offline it rotates through the ~40 images it has already cached from the
+sources still switched on. With only `local` on, nothing waits for Wi-Fi.
 
 <p>
   <img src="preview.png" width="49%" alt="The tile">
@@ -29,7 +30,7 @@ avoided, and when you are offline it rotates through the ~40 images it has alrea
 From the **widget store**: long-press empty space on the home screen, open the store and add
 **wallswap**. Or by hand: copy [`widget.owl`](widget.owl) to `~/.config/omalauncher/widgets/`
 (e.g. as `45-wallswap.owl`). The tile offers to install what it needs (`curl`, `jq`, `file`,
-`imagemagick`) on first start.
+`imagemagick` with its JPEG and WebP decoders) on first start.
 
 The **tile** is clear, a window onto the wallpaper itself, with its title and when the next swap is due; **→** swaps now.
 **Tap** the tile for its screen:
@@ -42,6 +43,8 @@ The **tile** is clear, a window onto the wallpaper itself, with its title and wh
 - **Sources**: switch each on or off (at least one stays on), and how often to swap: 15 min … once a
   day … only when you ask
 - **Wallhaven search**, e.g. `space`, `mountains`, `city night`
+- **Local folder**: where the `local` source takes its images, `~/Pictures/Wallpapers` unless you
+  change it (a path in Linux; `~` and paths relative to home work)
 
 **Keep** copies the image into the theme's backgrounds under its own name, so it stays in the Style
 menu after wallswap moves on.

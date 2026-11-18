@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-18
+
+### Added
+
+- Local folder on the screen: pick the folder the `local` source takes its images from.
+
+### Fixed
+
+- The local folder takes turns: every image once, in random order, then a new round, instead of each image showing only once ever.
+- With nothing new to show, only images from sources still switched on are reused, so a local-only setup no longer brings back old downloads.
+- With only the local folder on, automatic swaps don't wait for Wi-Fi.
+- A missing or empty local folder says so, instead of "couldn't fetch a new background".
+
 ## [1.4.0] - 2026-10-26
 
 ### Added
