@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-19
+
+### Added
+
+- Phone folder source: images straight from a folder in the phone, `Pictures/Wallpapers` unless you pick another, through the launcher's phone folders (`omalauncher ls` and `get`), with no copying into Linux. It takes turns like the Linux folder and needs no network.
+- A folder picker on the Phone folder and Linux folder rows: browse the folders and tap "use this folder". In the phone it starts from the folders the launcher may reach, and links to the launcher's settings to allow another.
+- The tile can be any size down to 1x1: one column wide stacks the caption over the next button, one row high puts them in a line, and a single cell shows only the next button.
+
+### Changed
+
+- The tile has the same glass as home's other tiles, at every size, instead of a darker band under the caption.
+- The Wallhaven search sits under Wallhaven and shows only while it's on.
+- The local folder is now "Linux folder", picked with the folder picker instead of typed.
+- Images from a folder are titled by their file name when it reads as words ("Sunset over Prague"), else by their turn in the round ("Image 3 of 24") instead of names like `IMG_20240101_1234`; the credit names their folder.
+
+### Fixed
+
+- **previous** passes over images whose file has since been moved or deleted, instead of stopping at "couldn't go back".
+
 ## [1.4.1] - 2026-11-18
 
 ### Added

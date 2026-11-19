@@ -8,12 +8,15 @@
 #   wallswap pause|resume|toggle   stop or restart automatic swapping
 #   wallswap info [CFG]            the current image and the schedule as JSON
 #   wallswap keep                  copy the current image into the theme's backgrounds
+#   wallswap browse CFG phone|local [PATH]
+#                                  the subfolders of a folder as JSON, for picking one
 #
 # CFG is one JSON argument (all keys optional):
-#   {"sources": ["apod","bing","wikimedia","wallhaven","local"], "interval": 1440,
+#   {"sources": ["apod","bing","wikimedia","wallhaven","phone","local"], "interval": 1440,
 #    "query": "", "screen": [1080, 2400], "theme": "tokyo-night", "localDir": "~/Pictures/Wallpapers",
-#    "wifiOnly": true}
-# With wifiOnly, automatic swaps wait for Wi-Fi; next always swaps.
+#    "phoneDir": "Pictures/Wallpapers", "wifiOnly": true}
+# With wifiOnly, automatic swaps wait for Wi-Fi; next always swaps. phone is a folder in the
+# phone, reached with `omalauncher ls` and `get`; local is a folder in Linux.
 #
 # The wallpaper is set the way the launcher's Style menu sets it: the image goes into
 # ~/.config/omarchy/backgrounds/<theme>/ as wallswap-*.jpg, cropped to the screen, and
@@ -26,7 +29,8 @@ declare -A SOURCE_NAMES=(
   [bing]="Bing image of the day"
   [wikimedia]="Wikimedia Commons picture of the day"
   [wallhaven]="Wallhaven top wallpapers"
-  [local]="Local folder"
+  [phone]="Phone folder"
+  [local]="Linux folder"
 )
 
 CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/wallswap
@@ -72,6 +76,7 @@ allowed_image() {
     wikimedia) [[ $2 =~ ^https://upload\.wikimedia\.org/wikipedia/commons/[^[:space:]]+$ ]] ;;
     wallhaven) [[ $2 =~ ^https://w\.wallhaven\.cc/full/[^[:space:]]+$ ]] ;;
     local) [[ $2 == file://* ]] && inside_local_dir "${2#file://}" ;;
+    phone) [[ $2 == "phone://$PHONE_DIR/"* && $2 != *[[:cntrl:]]* && "/${2#phone://}/" != */../* ]] ;;
     *) return 1 ;;
   esac
 }
@@ -158,8 +163,27 @@ src_local() {
   find -L "$LOCAL_DIR" -maxdepth 2 -type f \
     \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0 |
     while IFS= read -r -d '' f; do
-      printf 'file://%s\t%s\t%s\t\n' "$f" "$(basename "${f%.*}")" "Local folder"
+      [[ $f == *[[:cntrl:]]* ]] && continue
+      printf 'file://%s\t%s\t%s\n' "$f" "$(basename "${f%.*}")" "$(dirname "$f" | sed "s|^$HOME/|~/|")"
     done
+}
+
+# The images in a phone folder and its subfolders, one level deep, as the local folder.
+phone_ls() { omalauncher ls -- "$1" 2>/dev/null; }
+src_phone() {
+  command -v omalauncher >/dev/null || { log "no omalauncher command"; return 1; }
+  local list sub
+  list=$(phone_ls "$PHONE_DIR") || { log "phone folder not found: $PHONE_DIR"; return 1; }
+  {
+    printf '%s\n' "$PHONE_DIR"
+    jq -r '.[] | select(.dir and (.name | startswith(".") | not) and (.name | test("[[:cntrl:]]") | not)) | .name' <<< "$list" |
+      while IFS= read -r sub; do printf '%s\n' "$PHONE_DIR/$sub"; done
+  } | while IFS= read -r dir; do
+    { [[ $dir == "$PHONE_DIR" ]] && printf '%s' "$list" || phone_ls "$dir"; } |
+      jq -r --arg d "$dir" '.[] | select((.dir | not) and .size <= 80000000 and (.name | test("[[:cntrl:]]") | not)
+        and (.name | test("\\.(jpe?g|png|webp)$"; "i")))
+        | ["phone://\($d)/\(.name)", (.name | sub("\\.[^.]+$"; "")), $d] | @tsv'
+  done
 }
 
 # --------------------------------------------------------------- helpers
@@ -175,27 +199,61 @@ on_wifi() {
 
 seen() { grep -qxF -- "$1" "$STATE_DIR/seen" 2>/dev/null; }
 
-# The local folder takes turns: every image once, in random order, before any comes round
-# again. A download, once tried, is done for good.
-local_shown() { grep -qxF -- "$1" "$STATE_DIR/local-shown" 2>/dev/null; }
+# The folders, in the phone and in Linux, take turns: every image once, in random order,
+# before any comes round again, each folder in its own <source>-shown. A download, once
+# tried, is done for good.
+is_folder() { [[ $1 == phone || $1 == local ]]; }
+folder_shown() { # source url
+  grep -qxF -- "$2" "$STATE_DIR/$1-shown" 2>/dev/null || grep -qxF -- "$2" "$STATE_DIR/$1-skip" 2>/dev/null
+}
 mark_done() { # source url
-  if [[ $1 == local ]]; then append_state local-shown "$2"; else append_state seen "$2"; fi
+  if is_folder "$1"; then append_state "$1-shown" "$2"; else append_state seen "$2"; fi
 }
 # A new round leaves out only the image showing, so it doesn't come straight back.
-new_local_round() {
-  jq -r 'select(.source == "local") | .url // empty' "$STATE_DIR/current.json" 2>/dev/null | write_state local-shown
+new_round() { # source
+  : | write_state "$1-shown"
+  jq -r --arg s "$1" 'select(.source == $s) | .url // empty' "$STATE_DIR/current.json" 2>/dev/null | write_state "$1-skip"
+}
+pretty_folder() { # source
+  case $1 in
+    local) echo "${LOCAL_DIR/#"$HOME"/'~'}" ;;
+    phone) echo "$PHONE_DIR in the phone" ;;
+  esac
+}
+# A folder image's title: its file name when that reads as words ("sunset over Prague"),
+# else its turn in the round ("Image 3 of 24") for names like IMG_20240101_1234.
+folder_title() { # name n total
+  jq -rn --arg n "$1" --arg i "$2" --arg m "$3" '
+    ($n | [splits("[ _.\\-]+")] | map(select(. != ""))) as $t
+    | if ($t | length) > 0 and all($t[]; test("^(\\p{Lu}?\\p{Ll}+|[0-9]{1,4})$")) and any($t[]; test("\\p{L}{3}"))
+      then ($t | join(" ") | (.[0:1] | ascii_upcase) + .[1:])
+      else "Image \($i) of \($m)" end'
+}
+# What keeps a folder from giving images, said for the tile; nothing (status 1) when it can.
+folder_problem() { # source
+  local rc
+  case $1 in
+    local) [[ -d $LOCAL_DIR ]] || { echo "folder not found: $(pretty_folder local)"; return 0; } ;;
+    phone)
+      omalauncher version 2>/dev/null | jq -e '.commands | index("ls") and index("get")' >/dev/null ||
+        { echo "the phone folder needs a newer omalauncher"; return 0; }
+      omalauncher ls -- "$PHONE_DIR" >/dev/null 2>&1; rc=$?
+      (( rc == 3 )) && { echo "allow ${PHONE_DIR%%/*} in the launcher's settings (permissions)"; return 0; }
+      (( rc == 0 )) || { echo "folder not found: $(pretty_folder phone)"; return 0; } ;;
+  esac
+  [[ -n $("src_$1" 2>/dev/null | head -1) ]] || { echo "no images in $(pretty_folder "$1")"; return 0; }
+  return 1
 }
 
 switched_on() { [[ " ${SOURCES[*]} " == *" $1 "* ]]; }
 # Only the web sources need the network.
 needs_network() {
   local s
-  for s in "${SOURCES[@]}"; do [[ $s == local ]] || return 0; done
+  for s in "${SOURCES[@]}"; do is_folder "$s" || return 0; done
   return 1
 }
 # When a swap last waited for Wi-Fi (0: it doesn't wait).
 nowifi_at() { needs_network && cat "$STATE_DIR/nowifi" 2>/dev/null || echo 0; }
-pretty_dir() { echo "${LOCAL_DIR/#"$HOME"/'~'}"; }
 
 # Big enough to cover the screen without blowing it up more than 1.5 times.
 acceptable() { # width height
@@ -268,7 +326,7 @@ try_candidate() { # source url title credit page w h
   [[ -n $url ]] || return 1
   allowed_image "$source" "$url" || { log "$source: ignoring image outside its hosts: ${url:0:120}"; return 1; }
   allowed_page "$source" "$page" || page=""
-  if [[ $source == local ]]; then local_shown "$url" && return 1; else seen "$url" && return 1; fi
+  if is_folder "$source"; then folder_shown "$source" "$url" && return 1; else seen "$url" && return 1; fi
   acceptable "$w" "$h" || { mark_done "$source" "$url"; return 1; }
 
   local id ext file tmp dims coder
@@ -279,6 +337,13 @@ try_candidate() { # source url title credit page w h
 
   if [[ $url == file://* ]]; then
     file=$(realpath -e -- "${url#file://}") || return 1
+  elif [[ $source == phone ]]; then
+    # Copied afresh each time, as the phone's file may have changed under the same name.
+    tmp=$(mktemp -d -- "$CACHE_DIR/.phone.XXXXXX") || return 1
+    if ! omalauncher get -- "${url#phone://}" "$tmp/image" >/dev/null 2>&1 || [[ -L $tmp/image || ! -s $tmp/image ]]; then
+      log "couldn't copy ${url#phone://} from the phone"; rm -rf -- "$tmp"; return 1
+    fi
+    mv -f -- "$tmp/image" "$file"; rm -rf -- "$tmp"
   elif [[ -L $file || ! -s $file ]]; then
     tmp=$(mktemp -- "$CACHE_DIR/.download.XXXXXX") || return 1
     log "downloading $url"
@@ -298,6 +363,12 @@ try_candidate() { # source url title credit page w h
   fi
 
   mark_done "$source" "$url"
+  if is_folder "$source"; then
+    local n
+    n=$(wc -l < "$STATE_DIR/$source-shown" 2>/dev/null || echo 1)
+    (( n > FOLDER_TOTAL )) && n=$FOLDER_TOTAL
+    title=$(folder_title "$title" "$n" "$FOLDER_TOTAL")
+  fi
   if [[ $source == wallhaven && $page =~ /w/([a-z0-9]+)$ ]]; then
     local tags
     tags=$(http "https://wallhaven.cc/api/v1/w/${BASH_REMATCH[1]}" 2>/dev/null |
@@ -329,13 +400,13 @@ apply() { # meta.json [--no-history]
   log "set $(jq -r '"\(.title) — \(.credit)"' "$1")"
 }
 
-# A download from a source that is still switched on; the local folder has its rounds instead.
+# A download from a source that is still switched on; the folders have their rounds instead.
 fallback_cached() {
   local current meta
   current=$(jq -r '.file' "$STATE_DIR/current.json" 2>/dev/null)
   meta=$(ls -1 "$CACHE_DIR"/*.json 2>/dev/null | shuf | while read -r m; do
     src=$(jq -r '.source' "$m")
-    [[ $src != local ]] && switched_on "$src" || continue
+    ! is_folder "$src" && switched_on "$src" || continue
     [[ $(jq -r '.file' "$m") != "$current" && -f $(jq -r '.file' "$m") ]] && { echo "$m"; break; }
   done)
   [[ -n $meta ]] || return 1
@@ -344,28 +415,33 @@ fallback_cached() {
 }
 
 try_source() { # source  -> 0 set, 1 nothing new, 2 can't set any
-  local url title credit page w h rc
-  while IFS=$'\t' read -r url title credit page w h; do
+  local url title credit page w h rc line
+  local -a candidates
+  mapfile -t candidates < <("src_$1" 2>/dev/null | shuf)
+  FOLDER_TOTAL=${#candidates[@]}
+  for line in "${candidates[@]}"; do
+    IFS=$'\t' read -r url title credit page w h <<< "$line"
     try_candidate "$1" "$url" "$title" "$credit" "$page" "$w" "$h"; rc=$?
     (( rc == 1 )) || return "$rc"
-  done < <("src_$1" 2>/dev/null | shuf)
+  done
   return 1
 }
 
 cmd_next() {
   (( ${#SOURCES[@]} )) || die "no sources switched on"
   theme_name >/dev/null || die "unexpected theme name"
-  local attempt source rc local_done=
+  local attempt source rc s problem usable
+  local -A round_done=()
   for (( attempt = 0; attempt < ATTEMPTS; attempt++ )); do
     source=${SOURCES[RANDOM % ${#SOURCES[@]}]}
     declare -F "src_$source" >/dev/null || { log "unknown source: $source"; continue; }
-    [[ $source == local && -n $local_done ]] && continue
+    is_folder "$source" && [[ -n ${round_done[$source]} ]] && continue
     try_source "$source"; rc=$?
     # Every image in the folder has had its turn: start the next round.
-    if (( rc == 1 )) && [[ $source == local ]]; then
-      local_done=1
-      new_local_round
-      try_source local; rc=$?
+    if (( rc == 1 )) && is_folder "$source"; then
+      round_done[$source]=1
+      new_round "$source"
+      try_source "$source"; rc=$?
     fi
     (( rc == 0 )) && { prune_cache; return 0; }
     (( rc == 2 )) && { date +%s | write_state failed; die "couldn't set the background"; }
@@ -373,26 +449,39 @@ cmd_next() {
   done
   fallback_cached && return 0
   if ! needs_network; then
-    [[ -d $LOCAL_DIR ]] || { date +%s | write_state failed; die "folder not found: $(pretty_dir)"; }
-    [[ -n $(src_local 2>/dev/null | head -1) ]] || { date +%s | write_state failed; die "no images in $(pretty_dir)"; }
-    if inside_local_dir "$(jq -r '.file // empty' "$STATE_DIR/current.json" 2>/dev/null)"; then
+    # Only folders are on: say what's wrong with them.
+    problem="" usable=""
+    for s in "${SOURCES[@]}"; do
+      if p=$(folder_problem "$s"); then problem=${problem:-$p}; else usable=$s; fi
+    done
+    [[ -n $usable ]] || { date +%s | write_state failed; die "$problem"; }
+    s=$(jq -r '.source // empty' "$STATE_DIR/current.json" 2>/dev/null)
+    if is_folder "$s" && switched_on "$s"; then
       # Nothing but the image showing: on the schedule that's no error, just wait for the next one.
       if [[ $cmd == tick ]]; then date +%s | write_state last; rm -f -- "$STATE_DIR/error"; return 0; fi
-      die "no other usable image in $(pretty_dir)"
+      die "no other usable image in $(pretty_folder "$usable")"
     fi
     date +%s | write_state failed
-    die "no usable image in $(pretty_dir)"
+    die "no usable image in $(pretty_folder "$usable")"
   fi
   date +%s | write_state failed
   die "couldn't fetch a new background"
 }
 
+# Back to the last image before this one that is still there: one whose file was moved or
+# deleted since is passed over.
 cmd_prev() {
   local -a history
+  local i
   mapfile -t history < "$STATE_DIR/history" 2>/dev/null
   (( ${#history[@]} >= 2 )) || die "no previous background"
-  printf '%s\n' "${history[@]:0:${#history[@]}-1}" | write_state history
-  apply "${history[-2]}" --no-history || die "couldn't go back"
+  for (( i = ${#history[@]} - 2; i >= 0; i-- )); do
+    if apply "${history[i]}" --no-history 2>/dev/null; then
+      printf '%s\n' "${history[@]:0:i+1}" | write_state history
+      return 0
+    fi
+  done
+  die "no previous background"
 }
 
 cmd_pause() { : | write_state paused; }
@@ -446,6 +535,55 @@ cmd_info() {
       shown: (.bg != null and ((.bg | split("/") | last) as $b | $style == $b or ("wallswap-" + $style) == $b))}' <<< "$cur"
 }
 
+# The subfolders of a folder, for picking one: {path, parent, dirs: [{name, path}], images,
+# error}, with how many images are right in it. In the phone an empty PATH lists the folders
+# the launcher may reach; in Linux a PATH that's gone shows the nearest folder above it.
+cmd_browse() {
+  case $BROWSE_SOURCE in
+    phone) browse_phone ;;
+    local) browse_local ;;
+    *) jq -nc '{path: "", parent: null, dirs: [], error: "pick phone or local"}' ;;
+  esac
+  return 0 # what went wrong is in the JSON; a folder without subfolders isn't a failure
+}
+browse_phone() {
+  local p=${BROWSE#/} out rc parent
+  p=${p%/}
+  command -v omalauncher >/dev/null || { jq -nc '{path: "", parent: null, dirs: [], error: "no omalauncher command"}'; return; }
+  if [[ -z $p ]]; then
+    out=$(omalauncher folders 2>/dev/null) ||
+      { jq -nc '{path: "", parent: null, dirs: [], error: "this launcher has no phone folders: update it"}'; return; }
+    jq -c '{path: "", parent: null, dirs: ([.[].name] | sort_by(ascii_downcase) | map({name: ., path: .})), images: null}' <<< "$out"
+    return
+  fi
+  parent=${p%/*}
+  [[ $p == */* ]] || parent=""
+  out=$(omalauncher ls -- "$p" 2>&1); rc=$?
+  if (( rc )); then
+    jq -nc --arg p "$p" --arg parent "$parent" --arg e "${out#omalauncher: }" \
+      '{path: $p, parent: $parent, dirs: [], images: 0, error: ($e | split(";")[0])}'
+    return
+  fi
+  jq -c --arg p "$p" --arg parent "$parent" '{path: $p, parent: $parent,
+    dirs: ([.[] | select(.dir and (.name | startswith(".") | not) and (.name | test("[[:cntrl:]]") | not)) | .name]
+      | sort_by(ascii_downcase) | map({name: ., path: "\($p)/\(.)"})),
+    images: ([.[] | select((.dir | not) and (.name | test("\\.(jpe?g|png|webp)$"; "i")))] | length)}' <<< "$out"
+}
+browse_local() {
+  local p=${BROWSE:-$LOCAL_DIR} parent
+  [[ $p == "~" || $p == "~/"* ]] && p=$HOME${p#\~}
+  [[ $p == /* ]] || p=$HOME/$p
+  p=$(realpath -m -- "$p")
+  while [[ ! -d $p && $p != / ]]; do p=$(dirname -- "$p"); done
+  parent=$(dirname -- "$p")
+  tilde() { if [[ $1 == "$HOME" || $1 == "$HOME"/* ]]; then echo "~${1#"$HOME"}"; else echo "$1"; fi; }
+  find -L "$p" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -printf '%f\n' 2>/dev/null | grep -v '[[:cntrl:]]' |
+    sort -f | jq -Rnc --arg p "$(tilde "$p")" --arg parent "$( [[ $p == / ]] || tilde "$parent")" \
+      --argjson images "$(find -L "$p" -mindepth 1 -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null | wc -l)" '
+      {path: $p, parent: (if $parent == "" then null else $parent end), images: $images,
+       dirs: [inputs | {name: ., path: (if $p == "/" then "/\(.)" else "\($p)/\(.)" end)}]}'
+}
+
 cmd_keep() {
   local bg dest
   bg=$(jq -r '.bg // empty' "$STATE_DIR/current.json" 2>/dev/null)
@@ -467,6 +605,12 @@ QUERY=$(jq -r '.query // ""' <<< "$cfg")
 WIFI_ONLY=$(jq -r 'if .wifiOnly == false then false else true end' <<< "$cfg")
 THEME=$(jq -r '.theme // ""' <<< "$cfg")
 LOCAL_DIR=$(jq -r '.localDir // "" | if . == "" then "~/Pictures/Wallpapers" else . end' <<< "$cfg")
+PHONE_DIR=$(jq -r '.phoneDir // "" | if . == "" then "Pictures/Wallpapers" else . end' <<< "$cfg")
+PHONE_DIR=${PHONE_DIR#/}; PHONE_DIR=${PHONE_DIR%/}
+[[ $PHONE_DIR != *[[:cntrl:]]* && "/$PHONE_DIR/" != */../* && "/$PHONE_DIR/" != */./* && "/$PHONE_DIR/" != *//* ]] || PHONE_DIR=Pictures/Wallpapers
+BROWSE_SOURCE=${3-}
+BROWSE=${4-}
+FOLDER_TOTAL=0
 [[ $LOCAL_DIR == "~" || $LOCAL_DIR == "~/"* ]] && LOCAL_DIR=$HOME${LOCAL_DIR#\~}
 [[ $LOCAL_DIR == /* ]] || LOCAL_DIR=$HOME/$LOCAL_DIR # relative to home
 read -r SCREEN_W SCREEN_H < <(jq -r '(.screen // [1080, 2400]) | map(tostring) | join(" ")' <<< "$cfg")
@@ -484,6 +628,6 @@ case $cmd in
     exec 9< "$STATE_DIR"
     flock -n 9 || { log "another swap is running"; exit 0; }
     "cmd_$cmd" ;;
-  info|keep|pause|resume|toggle) "cmd_$cmd" ;;
-  *) sed -n '2,17p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; [[ $cmd == help ]] ;;
+  info|keep|pause|resume|toggle|browse) "cmd_$cmd" ;;
+  *) sed -n '2,19p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; [[ $cmd == help ]] ;;
 esac

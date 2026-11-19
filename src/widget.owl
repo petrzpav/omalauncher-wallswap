@@ -2,8 +2,8 @@ widget "wallswap" {
   page: 2
   order: 5
   size: 3x3
-  minSize: 2x2
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons, Wallhaven or a folder of your own once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.4.1"; license: "MIT"; category: "media" }
+  minSize: 1x1
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons, Wallhaven or a folder of your own, in the phone or in Linux, once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.5.0"; license: "MIT"; category: "media" }
 
   requires { pacman: ["curl", "jq", "file", "imagemagick", "libjpeg-turbo", "libwebp", "iproute2"] }
 
@@ -18,6 +18,7 @@ widget "wallswap" {
   state interval = 1440 persist
   state query = "" persist
   state localDir = "~/Pictures/Wallpapers" persist
+  state phoneDir = "Pictures/Wallpapers" persist
   state wifiOnly = true persist
   state notAsleep = true persist
 
@@ -26,7 +27,7 @@ widget "wallswap" {
   // Bedtime mode turns on Do Not Disturb: while it's on, automatic swaps wait.
   source modes = android.modes
   let asleep = notAsleep && modes != null && modes.dnd == true
-  let cfg = toJson({sources: sources, interval: interval, query: query, localDir: localDir, wifiOnly: wifiOnly, screen: sys == null ? null : [sys.display.width, sys.display.height], theme: sys == null ? null : sys.theme})
+  let cfg = toJson({sources: sources, interval: interval, query: query, localDir: localDir, phoneDir: phoneDir, wifiOnly: wifiOnly, screen: sys == null ? null : [sys.display.width, sys.display.height], theme: sys == null ? null : sys.theme})
   source st = cmd("bash -c ${sh(ws)} wallswap info ${sh(cfg)}") every 1m json
 
   // The schedule: `at` runs even while the page is off screen, and a time missed while the launcher
@@ -51,6 +52,9 @@ widget "wallswap" {
   } }
 
   let hasImg = st != null && st.bg != null
+  // A one-column tile stacks the caption over the next button; a one-row tile puts them in a line.
+  let narrow = (tileWidth ?? 999) < 100
+  let short = (tileHeight ?? 999) < 100
   let err = st == null ? "" : st.error ?? ""
   let paused = st != null && st.paused == true
   let waitingWifi = st != null && st.waitingWifi == true
@@ -62,12 +66,16 @@ widget "wallswap" {
     {id: "bing", label: "Bing", detail: "Image of the day, in the phone's size"},
     {id: "wikimedia", label: "Wikimedia Commons", detail: "Picture of the day"},
     {id: "wallhaven", label: "Wallhaven", detail: query != "" ? "Top wallpapers matching “${query}”" : "Top wallpapers of the year"},
-    {id: "local", label: "Local folder", detail: "Each image in turn from ${localDir}"}
+    {id: "phone", label: "Phone folder", detail: "Each image in turn from ${phoneDir}"},
+    {id: "local", label: "Linux folder", detail: "Each image in turn from ${localDir}"}
   ]
+  // Picking a folder, for the phone or the Linux folder source: which one is open, and what's in it.
+  state browsing = ""
+  state browseOut = ""
+  let br = browseOut == "" ? null : parseJson(browseOut)
 
-  // The tile is clear: the wallpaper itself shows through it, with only the caption over it.
+  // The tile has the same glass as home's other tiles, with the caption on it.
   padding: 0
-  background: alpha(background, 0)
   onTap: screen()
 
   // Arrows drawn as lines, so they sit in the middle of their circles whatever the font: a right
@@ -88,6 +96,16 @@ widget "wallswap" {
     }
   }
 
+  // A folder, drawn: the font has no folder glyph.
+  component FolderGlyph(tint = accent, s = 16) {
+    Canvas {
+      width: s
+      height: s
+      rect(s * 0.06, s * 0.16, s * 0.4, s * 0.24, fill: tint, radius: s * 0.06)
+      rect(s * 0.06, s * 0.28, s * 0.88, s * 0.58, fill: tint, radius: s * 0.08)
+    }
+  }
+
   component Action(label, turn = 0, base = false, active = true) {
     Column {
       gap: 4
@@ -104,35 +122,79 @@ widget "wallswap" {
     fill: true
     clip: true
     if !hasImg {
-      Box { fill: true; align: center; background: alpha(surface, 0.5)
-        Text { text: "󰸉"; fontSize: 40; color: muted; align: center }
+      Box { fill: true; align: center
+        Text { text: "󰸉"; fontSize: 40; color: muted; align: center; visible: !short }
       }
     }
-    Column {
-      fill: true
-      gap: 0
-      Spacer { weight: 1 }
+    if short && narrow {
+      // One cell: only the next button.
+      Box { fill: true; align: center
+        Box { width: 36; height: 36; radius: 18; align: center; background: alpha(accent, 0.22); opacity: busy ? 0.4 : 1
+          onTap: { if !busy { haptic(); busy = true; nextAt = 0; out = run("bash -c ${sh(ws)} wallswap next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+          Glyph { s: 18 }
+        }
+      }
+    } else if short {
+      // One row high: the caption and the next button in a line.
       Row {
+        fill: true
         gap: 8
-        align: bottom
-        padding: [10, 18, 8, 8]
-        background: linear(0, 0, 0, 1, [alpha(background, 0), alpha(background, 0.75), alpha(background, 0.92)])
+        align: center
+        padding: [10, 6, 8, 6]
         Column {
           gap: 1
           weight: 1
-          Text { text: hasImg ? st.title : "no wallpaper yet"; fontSize: 12; fontWeight: 600; maxLines: 2 }
+          Text { text: hasImg ? st.title : "no wallpaper yet"; fontSize: 12; fontWeight: 600; maxLines: 1 }
           Text { text: statusText != "" ? statusText : hasImg ? st.credit : ""; fontSize: 9; color: err != "" && !busy ? red : muted; maxLines: 1 }
         }
-        // Next right from the tile.
-        Box {
-          width: 32
-          height: 32
-          radius: 16
-          align: center
-          background: alpha(accent, 0.22)
-          opacity: busy ? 0.4 : 1
+        Box { width: 32; height: 32; radius: 16; align: center; background: alpha(accent, 0.22); opacity: busy ? 0.4 : 1
           onTap: { if !busy { haptic(); busy = true; nextAt = 0; out = run("bash -c ${sh(ws)} wallswap next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
           Glyph { s: 16 }
+        }
+      }
+    } else {
+      Column {
+        fill: true
+        gap: 0
+        Spacer { weight: 1 }
+        if narrow {
+          // One column wide: the caption over the next button, both at the bottom.
+          Column {
+            gap: 6
+            padding: [7, 18, 7, 8]
+            Column {
+              gap: 1
+              Text { text: hasImg ? st.title : "no wallpaper yet"; fontSize: 11; fontWeight: 600; maxLines: (tileHeight ?? 0) > 160 ? 3 : 2 }
+              Text { text: statusText != "" ? statusText : hasImg ? st.credit : ""; fontSize: 9; color: err != "" && !busy ? red : muted; maxLines: 2 }
+            }
+            Box { width: 32; height: 32; radius: 16; align: center; background: alpha(accent, 0.22); opacity: busy ? 0.4 : 1
+              onTap: { if !busy { haptic(); busy = true; nextAt = 0; out = run("bash -c ${sh(ws)} wallswap next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+              Glyph { s: 16 }
+            }
+          }
+        } else {
+          Row {
+            gap: 8
+            align: bottom
+            padding: [10, 18, 8, 8]
+            Column {
+              gap: 1
+              weight: 1
+              Text { text: hasImg ? st.title : "no wallpaper yet"; fontSize: 12; fontWeight: 600; maxLines: 2 }
+              Text { text: statusText != "" ? statusText : hasImg ? st.credit : ""; fontSize: 9; color: err != "" && !busy ? red : muted; maxLines: 1 }
+            }
+            // Next right from the tile.
+            Box {
+              width: 32
+              height: 32
+              radius: 16
+              align: center
+              background: alpha(accent, 0.22)
+              opacity: busy ? 0.4 : 1
+              onTap: { if !busy { haptic(); busy = true; nextAt = 0; out = run("bash -c ${sh(ws)} wallswap next ${sh(cfg)} 2>&1 | tail -1; date +%s%N") } }
+              Glyph { s: 16 }
+            }
+          }
         }
       }
     }
@@ -232,6 +294,8 @@ widget "wallswap" {
         Text { text: "SOURCES"; fontSize: 10; letterSpacing: 2; color: muted }
         for s in allSources key s.id {
           let picked = sources.indexOf(s.id) >= 0
+          let isFolder = s.id == "phone" || s.id == "local"
+          let folder = s.id == "phone" ? phoneDir : localDir
           Row {
             gap: 12
             align: center
@@ -244,6 +308,79 @@ widget "wallswap" {
               weight: 1
               Text { text: s.label; color: picked ? foreground : muted }
               Text { text: s.detail; style: small; color: muted; maxLines: 1 }
+            }
+            // The folder picker, opened below the row.
+            if isFolder {
+              Box {
+                width: 36
+                height: 36
+                radius: 18
+                align: center
+                background: alpha(accent, browsing == s.id ? 0.24 : 0.12)
+                onTap: { haptic(); if browsing == s.id { browsing = "" } else { browsing = s.id; browseOut = ""; browseOut = run("bash -c ${sh(ws)} wallswap browse ${sh(cfg)} ${sh(s.id)} ${sh(folder)}") } }
+                FolderGlyph { s: 16 }
+              }
+            }
+          }
+          // The search, only while Wallhaven is on.
+          if s.id == "wallhaven" && picked {
+            Box {
+              padding: [36, 0, 8, 6]
+              Input { text: query; placeholder: "search, e.g. space, mountains, city night"; onSubmit: query = trim(value) }
+            }
+          }
+          if isFolder && browsing == s.id && br != null {
+            Box {
+              padding: [28, 0, 0, 6]
+              Column {
+                gap: 0
+                padding: [4, 6, 4, 6]
+                radius: 8 * corners
+                background: alpha(accent, 0.06)
+                Text { text: br.path == "" ? "Folders the launcher may reach" : br.path; style: small; color: muted; padding: [8, 4]; maxLines: 2 }
+                if br.parent != null {
+                  Row {
+                    gap: 12
+                    align: center
+                    padding: [4, 8]
+                    onTap: { haptic(); browseOut = run("bash -c ${sh(ws)} wallswap browse ${sh(cfg)} ${sh(s.id)} ${sh(br.parent)}") }
+                    Glyph { turn: -90; s: 16 }
+                    Text { text: br.parent == "" ? "all folders" : br.parent; color: muted; weight: 1; maxLines: 1 }
+                  }
+                }
+                for d in br.dirs key d.path {
+                  Row {
+                    gap: 12
+                    align: center
+                    padding: [4, 8]
+                    onTap: { haptic(); browseOut = run("bash -c ${sh(ws)} wallswap browse ${sh(cfg)} ${sh(s.id)} ${sh(d.path)}") }
+                    FolderGlyph { s: 16 }
+                    Text { text: d.name; weight: 1; maxLines: 1 }
+                    Text { text: "›"; color: muted }
+                  }
+                }
+                if br.error != null {
+                  Text { text: br.error; style: small; color: red; padding: [8, 4] }
+                }
+                if br.path == "" {
+                  Row {
+                    gap: 12
+                    align: center
+                    padding: [4, 8]
+                    onTap: { haptic(); launcher("settings") }
+                    Text { text: "+"; color: accent; fontSize: 18; width: 16; align: center }
+                    Text { text: "Another folder: allow it in the launcher's settings, under permissions"; style: small; color: muted; weight: 1 }
+                  }
+                } else {
+                  Row {
+                    gap: 12
+                    align: center
+                    padding: [8, 8]
+                    Text { text: br.images > 0 ? "${br.images} images here" : "no images right here"; style: small; color: muted; weight: 1 }
+                    Button { text: "use this folder"; onTap: { haptic(); if s.id == "phone" { phoneDir = br.path } else { localDir = br.path }; browsing = ""; if !picked { sources = flatten([sources, [s.id]]) } } }
+                  }
+                }
+              }
             }
           }
         }
@@ -260,17 +397,6 @@ widget "wallswap" {
             Text { text: "tap to change: 15 min … once a day … only when you ask"; style: small; color: muted; maxLines: 1 }
           }
         }
-      }
-      Column {
-        gap: 2
-        Text { text: "WALLHAVEN SEARCH"; fontSize: 10; letterSpacing: 2; color: muted }
-        Input { text: query; placeholder: "e.g. space, mountains, city night"; onSubmit: query = trim(value) }
-      }
-      Column {
-        gap: 2
-        Text { text: "LOCAL FOLDER"; fontSize: 10; letterSpacing: 2; color: muted }
-        Input { text: localDir; placeholder: "~/Pictures/Wallpapers"; onSubmit: localDir = trim(value) == "" ? "~/Pictures/Wallpapers" : trim(value) }
-        Text { text: "JPEG, PNG and WebP images in it and its subfolders, one level deep"; style: small; color: muted }
       }
       Text { text: "Images keep their original licenses; tap the picture for its source page. A port of omarchy-wallswap."; style: small; color: muted }
     }
