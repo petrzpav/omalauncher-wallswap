@@ -3,7 +3,7 @@ widget "wallswap" {
   order: 5
   size: 3x3
   minSize: 1x1
-  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons, Wallhaven or a folder of your own, in the phone or in Linux, once a day, cropped to the phone, with a preview, credits, previous and keep"; version: "1.5.0"; license: "MIT"; category: "media" }
+  meta { owl: 13; description: "Keeps the wallpaper fresh: a new image from NASA APOD, Bing, Wikimedia Commons, Wallhaven or your own folder in the phone or Linux, once a day, cropped to the phone, with credits, previous and keep"; version: "1.5.0"; license: "MIT"; category: "media" }
 
   requires { pacman: ["curl", "jq", "file", "imagemagick", "libjpeg-turbo", "libwebp", "iproute2"] }
 
